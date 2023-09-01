@@ -913,7 +913,10 @@ pub trait Instance {
         let hold = half_cycle;
         // default we set the timeout value to about 10 bus cycles
         // log(20*half_cycle)/log(2) = log(half_cycle)/log(2) +  log(20)/log(2)
-        let tout = (4 * 8 - (5 * half_cycle).leading_zeros()) + 2;
+        // HACK: change this value for bno085 clock streching
+        // see https://github.com/esp-rs/esp-hal/issues/352
+        // let tout = (4 * 8 - (5 * half_cycle).leading_zeros()) + 2;
+        let tout = 20;
 
         // According to the Technical Reference Manual, the following timings must be
         // subtracted by 1. However, according to the practical measurement and
