@@ -916,7 +916,7 @@ pub trait Instance {
         // HACK: change this value for bno085 clock streching
         // see https://github.com/esp-rs/esp-hal/issues/352
         // let tout = (4 * 8 - (5 * half_cycle).leading_zeros()) + 2;
-        let tout = 12;
+        let tout = 13;
 
         // According to the Technical Reference Manual, the following timings must be
         // subtracted by 1. However, according to the practical measurement and
