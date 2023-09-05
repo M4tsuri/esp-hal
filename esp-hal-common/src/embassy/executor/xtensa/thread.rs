@@ -37,13 +37,6 @@ fn FROM_CPU_INTR0() {
 }
 
 pub(super) fn pend_thread_mode(core: usize) {
-    use core::sync::atomic::Ordering;
-
-    #[cfg(dport)]
-    use crate::peripherals::DPORT as SystemPeripheral;
-    #[cfg(system)]
-    use crate::peripherals::SYSTEM as SystemPeripheral;
-
     // Signal that there is work to be done.
     SIGNAL_WORK_THREAD_MODE[core].store(true, Ordering::SeqCst);
 
@@ -72,11 +65,10 @@ impl Executor {
     /// Create a new Executor.
     pub fn new() -> Self {
         #[cfg(multi_core)]
-        interrupt::enable(
+        unwrap!(interrupt::enable(
             peripherals::Interrupt::FROM_CPU_INTR0,
             interrupt::Priority::Priority1,
-        )
-        .unwrap();
+        ));
 
         Self {
             inner: raw::Executor::new(usize::from_le_bytes([0, get_core() as u8, 0, 0]) as *mut ()),

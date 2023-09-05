@@ -7,28 +7,38 @@ Please note that only changes to the `esp-hal-common` package are tracked in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+[Unreleased]
 
 ### Added
 
-- Add the `esp32c6-lp-hal` package (#714)
-- Add GPIO (output) and delay functionality to `esp32c6-lp-hal` (#715)
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.12.0]
+
+### Added
+
 - Implement RTCIO pullup, pulldown and hold control for Xtensa MCUs (#684)
-- Add GPIO input support and implement additional `embedded-hal` output traits for the C6's LP core [#720]
 - S3: Implement RTCIO wakeup source (#690)
-- Add PARL_IO TX driver for ESP32-C6 / ESP32-H2 (#733)
+- Add PARL_IO driver for ESP32-C6 / ESP32-H2 (#733, #760)
 - Implement `ufmt_write::uWrite` trait for USB Serial JTAG (#751)
 - Add HMAC peripheral support (#755)
-- Add PARL_IO RX driver for ESP32-C6 / ESP32-H2 (#760)
 - Add multicore-aware embassy executor for Xtensa MCUs (#723, #756).
 - Add interrupt-executor for Xtensa MCUs (#723, #756).
 - Add missing `Into<Gpio<Analog, GPIONUN>>` conversion (#764)
+- Updated `clock` module documentation (#774)
+- Add `log` feature to enable log output (#773)
+- Add `defmt` feature to enable log output (#773)
 
 ### Changed
 
 - Update the `embedded-hal-*` packages to `1.0.0-rc.1` and implement traits from `embedded-io` and `embedded-io-async` (#747)
 - Moved AlignmentHelper to its own module (#753)
 - Disable all watchdog timers by default at startup (#763)
+- `log` crate is now opt-in (#773)
 
 ### Fixed
 
@@ -36,8 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix wrong `dram_seg` length in `esp32s2-hal` linker script (#732)
 - Fix setting alarm when a timer group is used as the alarm source. (#730)
 - Fix `Instant::now()` not counting in some cases when using TIMG0 as the timebase (#737)
-
-### Removed
+- Fix number of ADC attenuations for ESP32-C6 (#771)
 
 ### Breaking
 
@@ -203,7 +212,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2022-08-05
 
-[Unreleased]: https://github.com/esp-rs/esp-hal/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/esp-rs/esp-hal/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/esp-rs/esp-hal/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/esp-rs/esp-hal/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/esp-rs/esp-hal/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/esp-rs/esp-hal/compare/v0.8.0...v0.9.0
