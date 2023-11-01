@@ -56,7 +56,7 @@ impl<'d> SystemTimer<'d> {
     #[cfg(esp32s2)]
     pub const BIT_MASK: u64 = u64::MAX;
     #[cfg(not(esp32s2))]
-    pub const BIT_MASK: u64 = 0xFFFFFFFFFFFFF;
+    pub const BIT_MASK: u64 = 0xF_FFFF_FFFF_FFFF;
 
     #[cfg(esp32s2)]
     pub const TICKS_PER_SECOND: u64 = 80_000_000; // TODO this can change when we have support for changing APB frequency
@@ -65,6 +65,10 @@ impl<'d> SystemTimer<'d> {
 
     pub fn new(p: impl Peripheral<P = SYSTIMER> + 'd) -> Self {
         crate::into_ref!(p);
+
+        #[cfg(soc_etm)]
+        etm::enable_etm();
+
         Self {
             _inner: p,
             alarm0: Alarm::new(),
@@ -114,7 +118,7 @@ impl<T, const CHANNEL: u8> Alarm<T, CHANNEL> {
         Self { _pd: PhantomData }
     }
 
-    pub fn interrupt_enable(&self, val: bool) {
+    pub fn enable_interrupt(&self, val: bool) {
         let systimer = unsafe { &*SYSTIMER::ptr() };
         match CHANNEL {
             0 => systimer.int_ena.modify(|_, w| w.target0_int_ena().bit(val)),
@@ -225,19 +229,20 @@ impl<const CHANNEL: u8> Alarm<Target, CHANNEL> {
 }
 
 impl<const CHANNEL: u8> Alarm<Periodic, CHANNEL> {
-    pub fn set_period(&self, period: fugit::HertzU32) {
-        let time_period: MicrosDurationU32 = period.into_duration();
-        let us = time_period.ticks();
+    pub fn set_period(&self, period: MicrosDurationU32) {
+        let us = period.ticks();
+        let ticks = us * (SystemTimer::TICKS_PER_SECOND / 1_000_000) as u32;
+
         self.configure(|tconf, hi, lo| unsafe {
             tconf.write(|w| {
                 w.target0_period_mode()
                     .set_bit()
                     .target0_period()
-                    .bits(us * (SystemTimer::TICKS_PER_SECOND as u32 / 1000_000))
+                    .bits(ticks)
             });
             hi.write(|w| w.timer_target0_hi().bits(0));
             lo.write(|w| w.timer_target0_lo().bits(0));
-        })
+        });
     }
 
     pub fn into_target(self) -> Alarm<Target, CHANNEL> {
@@ -260,5 +265,170 @@ impl<T> Alarm<T, 1> {
 impl<T> Alarm<T, 2> {
     pub const unsafe fn conjure() -> Self {
         Self { _pd: PhantomData }
+    }
+}
+
+// FIXME: The `embedded_hal_async::delay::DelayUs` trait implementation
+//        interferes with the embassy time driver, which also uses the
+//        `SYSTIMER` peripheral. Until we come up with a solution, do not
+//        implement this trait if the `embassy-time-systick` feature is enabled.
+// #[cfg(all(feature = "async", not(feature = "embassy-time-systick")))]
+// HACK: disable `asynch` module *always* until we come up with a solution
+#[cfg(not(systimer))]
+mod asynch {
+    use core::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    use embassy_sync::waitqueue::AtomicWaker;
+    use procmacros::interrupt;
+
+    use super::*;
+
+    const NUM_ALARMS: usize = 3;
+
+    const INIT: AtomicWaker = AtomicWaker::new();
+    static WAKERS: [AtomicWaker; NUM_ALARMS] = [INIT; NUM_ALARMS];
+
+    pub(crate) struct AlarmFuture<'a, const N: u8> {
+        phantom: PhantomData<&'a Alarm<Periodic, N>>,
+    }
+
+    impl<'a, const N: u8> AlarmFuture<'a, N> {
+        pub(crate) fn new(alarm: &'a Alarm<Periodic, N>) -> Self {
+            alarm.clear_interrupt();
+            alarm.enable_interrupt(true);
+
+            Self {
+                phantom: PhantomData,
+            }
+        }
+
+        fn event_bit_is_clear(&self) -> bool {
+            let r = unsafe { &*crate::peripherals::SYSTIMER::PTR }
+                .int_ena
+                .read();
+
+            match N {
+                0 => r.target0_int_ena().bit_is_clear(),
+                1 => r.target1_int_ena().bit_is_clear(),
+                2 => r.target2_int_ena().bit_is_clear(),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    impl<'a, const N: u8> core::future::Future for AlarmFuture<'a, N> {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+            WAKERS[N as usize].register(ctx.waker());
+
+            if self.event_bit_is_clear() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }
+    }
+
+    impl<const CHANNEL: u8> embedded_hal_async::delay::DelayUs for Alarm<Periodic, CHANNEL> {
+        async fn delay_us(&mut self, us: u32) {
+            let period = MicrosDurationU32::from_ticks(us);
+            self.set_period(period);
+
+            AlarmFuture::new(self).await;
+        }
+
+        async fn delay_ms(&mut self, ms: u32) {
+            for _ in 0..ms {
+                self.delay_us(1000).await;
+            }
+        }
+    }
+
+    #[interrupt]
+    fn SYSTIMER_TARGET0() {
+        unsafe { &*crate::peripherals::SYSTIMER::PTR }
+            .int_ena
+            .modify(|_, w| w.target0_int_ena().clear_bit());
+
+        WAKERS[0].wake();
+    }
+
+    #[interrupt]
+    fn SYSTIMER_TARGET1() {
+        unsafe { &*crate::peripherals::SYSTIMER::PTR }
+            .int_ena
+            .modify(|_, w| w.target1_int_ena().clear_bit());
+
+        WAKERS[1].wake();
+    }
+
+    #[interrupt]
+    fn SYSTIMER_TARGET2() {
+        unsafe { &*crate::peripherals::SYSTIMER::PTR }
+            .int_ena
+            .modify(|_, w| w.target2_int_ena().clear_bit());
+
+        WAKERS[2].wake();
+    }
+}
+
+#[cfg(soc_etm)]
+pub mod etm {
+    //! # Event Task Matrix Function
+    //!
+    //! ## Overview
+    //!
+    //!    The system timer supports the Event Task Matrix (ETM) function, which
+    //! allows the system timer’s    ETM events to trigger any
+    //!    peripherals’ ETM tasks.
+    //!
+    //!    The system timer can generate the following ETM events:
+    //!    - SYSTIMER_EVT_CNT_CMPx: Indicates the alarm pulses generated by
+    //!      COMPx
+    //!
+    //! ## Example
+    //! ```no_run
+    //! let syst = SystemTimer::new(peripherals.SYSTIMER);
+    //! let mut alarm0 = syst.alarm0.into_periodic();
+    //! alarm0.set_period(1u32.secs());
+    //!
+    //! let timer_event = SysTimerEtmEvent::new(&mut alarm0);
+    //! ```
+
+    use super::*;
+
+    /// An ETM controlled SYSTIMER event
+    pub struct SysTimerEtmEvent<'a, M, const N: u8> {
+        alarm: &'a mut Alarm<M, N>,
+    }
+
+    impl<'a, M, const N: u8> SysTimerEtmEvent<'a, M, N> {
+        /// Creates an ETM event from the given [Alarm]
+        pub fn new(alarm: &'a mut Alarm<M, N>) -> Self {
+            Self { alarm }
+        }
+
+        /// Execute closure f with mutable access to the wrapped [Alarm].
+        pub fn with<R>(&self, f: impl FnOnce(&&'a mut Alarm<M, N>) -> R) -> R {
+            let alarm = &self.alarm;
+            f(alarm)
+        }
+    }
+
+    impl<'a, M, const N: u8> crate::etm::private::Sealed for SysTimerEtmEvent<'a, M, N> {}
+
+    impl<'a, M, const N: u8> crate::etm::EtmEvent for SysTimerEtmEvent<'a, M, N> {
+        fn id(&self) -> u8 {
+            50 + N
+        }
+    }
+
+    pub(super) fn enable_etm() {
+        let syst = unsafe { crate::peripherals::SYSTIMER::steal() };
+        syst.conf.modify(|_, w| w.etm_en().set_bit());
     }
 }

@@ -17,7 +17,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-## [0.12.0]
+## [0.13.0] - 2023-10-31
+
+### Added
+
+- Added `embassy-time-systick` to ESP32-S2 (#827)
+- Implement enabling/disabling BLE clock on ESP32-C6 (#784)
+- Async support for RMT (#787)
+- Implement `defmt::Format` for more types (#786)
+- Add new_no_miso to Spi FullDuplexMode (#794)
+- Add UART support for splitting into TX and RX (#754)
+- Async support for I2S (#801)
+- Async support for PARL_IO (#807)
+- ETM driver, GPIO ETM (#819)
+- (G)DMA AES support (#821)
+- SYSTIMER ETM functionality (#828)
+- Adding async support for RSA peripheral(doesn't work properly for `esp32` chip - issue will be created)(#790)
+- Added sleep support for ESP32-C3 with timer and GPIO wakeups (#795)
+- Support for ULP-RISCV including Delay and GPIO (#840, #845)
+- Add bare-bones SPI slave support, DMA only (#580, #843)
+- Embassy `#[main]` convenience macro (#841)
+- Add a `defmt` feature to the `esp-hal-smartled` package (#846)
+- Support 16MB octal PS-RAM for ESP32-S3 (#858)
+- RISCV TRACE Encoder driver for ESP32-C6 / ESP32-H2 (#864)
+
+### Changed
+
+- Bumped MSRV to 1.67 (#798)
+- Optimised multi-core critical section implementation (#797)
+- Changed linear- and curve-calibrated ADC to provide readings in mV (#836)
+
+### Fixed
+
+- S3: Allow powering down RC_FAST_CLK (#796)
+- UART/ESP32: fix calculating FIFO counter with `get_rx_fifo_count()` (#804)
+- Xtensa targets: Use ESP32Reset - not Reset (#823)
+- Examples should now work with the `defmt` feature (#810)
+- Fixed a race condition causing SpiDma to stop working unexpectedly (#869)
+- Fixed async uart serial, and updated the embassy_serial examples (#871).
+- Fix ESP32-S3 direct-boot (#873)
+- Fix ESP32-C6 ADC (#876)
+
+### Removed
+
+- `Pin::is_pcore_interrupt_set` (#793)
+- `Pin::is_pcore_non_maskable_interrupt_set` (#793)
+- `Pin::is_acore_interrupt_set` (#793)
+- `Pin::is_acore_non_maskable_interrupt_set` (#793)
+- `Pin::enable_hold` (#793)
+- Removed the generic return type for ADC reads (#792)
+
+### Breaking
+
+- `Uart::new` now takes the `&Clocks` struct to ensure baudrate is correct for CPU/APB speed. (#808)
+- `Uart::new_with_config` takes an `Config` instead of `Option<Config>`. (#808)
+- `Alarm::set_period` takes a period (duration) instead of a frequency (#812)
+- `Alarm::interrupt_clear` is now `Alarm::clear_interrupt` to be consistent (#812)
+- The `PeripheralClockControl` struct is no longer public, drivers no longer take this as a parameter (#817)
+- Unify the system peripheral, `SYSTEM`, `DPORT` and `PCR` are now all exposed as `SYSTEM` (#832).
+- Unified the ESP32's and ESP32-C2's xtal frequency features (#831)
+- Replace any underscores in feature names with dashes (#833)
+- The `spi` and `spi_slave` modules have been refactored into the `spi`, `spi::master`, and `spi::slave` modules (#843)
+- The `WithDmaSpi2`/`WithDmaSpi3` structs are no longer generic around the inner peripheral type (#853)
+- The `SarAdcExt`/`SensExt` traits are now collectively named `AnalogExt` instead (#857)
+- Replace the `radio` module with peripheral singleton structs (#852)
+- The SPI traits are no longer re-exported in the main prelude, but from preludes in `spi::master`/`spi::slave` instead (#860)
+- The `embedded-hal-1` and `embedded-hal-async` traits are no longer re-exported in the prelude (#860)
+
+## [0.12.0] - 2023-09-05
 
 ### Added
 
@@ -32,6 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `clock` module documentation (#774)
 - Add `log` feature to enable log output (#773)
 - Add `defmt` feature to enable log output (#773)
+- A new macro to load LP core code on ESP32-C6 (#779)
+- Add `ECC`` peripheral driver (#785)
+- Initial LLD support for Xtensa chips (#861).
 
 ### Changed
 
@@ -47,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix setting alarm when a timer group is used as the alarm source. (#730)
 - Fix `Instant::now()` not counting in some cases when using TIMG0 as the timebase (#737)
 - Fix number of ADC attenuations for ESP32-C6 (#771)
+- Fix SHA registers access (#805)
 
 ### Breaking
 
@@ -212,7 +283,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2022-08-05
 
-[Unreleased]: https://github.com/esp-rs/esp-hal/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/esp-rs/esp-hal/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/esp-rs/esp-hal/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/esp-rs/esp-hal/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/esp-rs/esp-hal/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/esp-rs/esp-hal/compare/v0.9.0...v0.10.0

@@ -30,12 +30,8 @@
 //! ## Example
 //! ```no_run
 //! let source_data = "HELLO, ESPRESSIF!".as_bytes();
-//! let mut remaining = source_data.clone();
-//! let mut hasher = Sha::new(
-//!     peripherals.SHA,
-//!     ShaMode::SHA256,
-//!     &mut system.peripheral_clock_control,
-//! );
+//! let mut remaining = source_data;
+//! let mut hasher = Sha::new(peripherals.SHA, ShaMode::SHA256);
 //!
 //! // Short hashes can be created by decreasing the output buffer to the desired
 //! // length
@@ -149,13 +145,10 @@ fn mode_as_bits(mode: ShaMode) -> u8 {
 // This implementation might fail after u32::MAX/8 bytes, to increase please see
 // ::finish() length/self.cursor usage
 impl<'d> Sha<'d> {
-    pub fn new(
-        sha: impl Peripheral<P = SHA> + 'd,
-        mode: ShaMode,
-        peripheral_clock_control: &mut PeripheralClockControl,
-    ) -> Self {
+    pub fn new(sha: impl Peripheral<P = SHA> + 'd, mode: ShaMode) -> Self {
         crate::into_ref!(sha);
-        peripheral_clock_control.enable(crate::system::Peripheral::Sha);
+
+        PeripheralClockControl::enable(crate::system::Peripheral::Sha);
 
         // Setup SHA Mode
         #[cfg(not(esp32))]
@@ -182,19 +175,13 @@ impl<'d> Sha<'d> {
 
     #[cfg(not(esp32))]
     fn process_buffer(&mut self) {
-        // FIXME: SHA_START_REG & SHA_CONTINUE_REG are wrongly marked as RO (they are
-        // WO)
         if self.first_run {
             // Set SHA_START_REG
-            unsafe {
-                self.sha.start.as_ptr().write_volatile(1u32);
-            }
+            self.sha.start.write(|w| unsafe { w.bits(1) });
             self.first_run = false;
         } else {
             // SET SHA_CONTINUE_REG
-            unsafe {
-                self.sha.continue_.as_ptr().write_volatile(1u32);
-            }
+            self.sha.continue_.write(|w| unsafe { w.bits(1) });
         }
     }
 

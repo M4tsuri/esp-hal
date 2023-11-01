@@ -14,15 +14,18 @@
 //! - `eh1` - Implement the traits defined in the `1.0.0-xxx` pre-releases of
 //!   [embedded-hal], [embedded-hal-nb], and [embedded-io]
 //! - `embassy` - Enable support for [embassy], a modern asynchronous embedded
-//!   framework
+//!   framework. One of `embassy-time-*` features must also be enabled when
+//!   using this feature.
 //! - `embassy-executor-interrupt` - Use the interrupt-mode embassy executor
 //! - `embassy-executor-thread` - Use the thread-mode embassy executor
+//! - `embassy-time-systick` - Enable the [embassy] time driver using the
+//!   `SYSTIMER` peripheral
 //! - `embassy-time-timg0` - Enable the [embassy] time driver using the `TIMG0`
 //!   peripheral
 //! - `log` - enable log output using the `log` crate
-//! - `psram_2m` - Use externally connected PSRAM (2MB)
-//! - `psram_4m` - Use externally connected PSRAM (4MB)
-//! - `psram_8m` - Use externally connected PSRAM (8MB)
+//! - `psram-2m` - Use externally connected PSRAM (2MB)
+//! - `psram-4m` - Use externally connected PSRAM (4MB)
+//! - `psram-8m` - Use externally connected PSRAM (8MB)
 //! - `rt` - Runtime support
 //! - `ufmt` - Implement the [`ufmt_write::uWrite`] trait for the UART driver
 //! - `vectored` - Enable interrupt vectoring
@@ -47,11 +50,6 @@ use esp_hal_common::xtensa_lx_rt::exception::ExceptionCause;
 pub use esp_hal_common::*;
 // Always enable atomic emulation on ESP32-S2
 use xtensa_atomic_emulation_trap as _;
-
-/// Common module for analog functions
-pub mod analog {
-    pub use esp_hal_common::analog::{AvailableAnalog, SensExt};
-}
 
 /// Function initializes ESP32 specific memories (RTC slow and fast) and
 /// then calls original Reset function

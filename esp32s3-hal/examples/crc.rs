@@ -19,17 +19,13 @@ use nb::block;
 #[entry]
 fn main() -> ! {
     let peripherals = Peripherals::take();
-    let mut system = peripherals.SYSTEM.split();
+    let system = peripherals.SYSTEM.split();
     let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
 
-    let timer_group0 = TimerGroup::new(
-        peripherals.TIMG0,
-        &clocks,
-        &mut system.peripheral_clock_control,
-    );
+    let timer_group0 = TimerGroup::new(peripherals.TIMG0, &clocks);
     let mut timer0 = timer_group0.timer0;
 
-    let mut serial0 = Uart::new(peripherals.UART0, &mut system.peripheral_clock_control);
+    let mut uart0 = Uart::new(peripherals.UART0, &clocks);
 
     timer0.start(1u64.secs());
 
@@ -37,7 +33,7 @@ fn main() -> ! {
     let sentence = "The quick brown fox jumps over a lazy dog";
 
     writeln!(
-        serial0,
+        uart0,
         "Performing CRC calculations on test string \"{data}\""
     )
     .unwrap();
@@ -82,7 +78,7 @@ fn main() -> ! {
         );
 
         writeln!(
-            serial0,
+            uart0,
             "{:08x} {:08x} {:08x} {:08x} {:04x} {:04x} {:02x} {:02x} {}",
             crc_hdlc,
             crc_bzip2,

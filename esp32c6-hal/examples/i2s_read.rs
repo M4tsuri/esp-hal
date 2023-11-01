@@ -1,4 +1,4 @@
-//! This shows how to continously receive data via I2S
+//! This shows how to continuously receive data via I2S
 //!
 //! Pins used
 //! MCLK    GPIO4
@@ -29,12 +29,12 @@ use esp_println::println;
 #[entry]
 fn main() -> ! {
     let peripherals = Peripherals::take();
-    let mut system = peripherals.PCR.split();
+    let system = peripherals.SYSTEM.split();
     let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
 
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
 
-    let dma = Gdma::new(peripherals.DMA, &mut system.peripheral_clock_control);
+    let dma = Gdma::new(peripherals.DMA);
     let dma_channel = dma.channel0;
 
     let mut tx_descriptors = [0u32; 8 * 3];
@@ -52,7 +52,6 @@ fn main() -> ! {
             &mut rx_descriptors,
             DmaPriority::Priority0,
         ),
-        &mut system.peripheral_clock_control,
         &clocks,
     );
 

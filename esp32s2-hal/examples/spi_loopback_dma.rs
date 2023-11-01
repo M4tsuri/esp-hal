@@ -23,7 +23,10 @@ use esp32s2_hal::{
     pdma::Dma,
     peripherals::Peripherals,
     prelude::*,
-    spi::{Spi, SpiMode},
+    spi::{
+        master::{prelude::*, Spi},
+        SpiMode,
+    },
     Delay,
 };
 use esp_backtrace as _;
@@ -32,7 +35,7 @@ use esp_println::println;
 #[entry]
 fn main() -> ! {
     let peripherals = Peripherals::take();
-    let mut system = peripherals.SYSTEM.split();
+    let system = peripherals.SYSTEM.split();
     let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
 
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
@@ -41,7 +44,7 @@ fn main() -> ! {
     let mosi = io.pins.gpio35;
     let cs = io.pins.gpio34;
 
-    let dma = Dma::new(system.dma, &mut system.peripheral_clock_control);
+    let dma = Dma::new(system.dma);
     let dma_channel = dma.spi2channel;
 
     let mut descriptors = [0u32; 8 * 3];
@@ -55,7 +58,6 @@ fn main() -> ! {
         cs,
         100u32.kHz(),
         SpiMode::Mode0,
-        &mut system.peripheral_clock_control,
         &clocks,
     )
     .with_dma(dma_channel.configure(
@@ -83,12 +85,12 @@ fn main() -> ! {
 
         let transfer = spi.dma_transfer(send, receive).unwrap();
         // here we could do something else while DMA transfer is in progress
-        let mut i = 0;
+        let mut n = 0;
         // Check is_done until the transfer is almost done (32000 bytes at 100kHz is
         // 2.56 seconds), then move to wait().
-        while !transfer.is_done() && i < 10 {
+        while !transfer.is_done() && n < 10 {
             delay.delay_ms(250u32);
-            i += 1;
+            n += 1;
         }
         // the buffers and spi is moved into the transfer and we can get it back via
         // `wait`

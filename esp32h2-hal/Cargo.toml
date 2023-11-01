@@ -1,13 +1,13 @@
 [package]
 name    = "esp32h2-hal"
-version = "0.3.0"
+version = "0.4.0"
 authors = [
     "Kirill Mikhailov <playfulfence@gmail.com>",
     "Jesse Braham <jesse@beta7.io>",
     "Sergio Gasquez Arcos <sergio.gasquez@gmail.com",
 ]
 edition      = "2021"
-rust-version = "1.65.0"
+rust-version = "1.67.0"
 description  = "HAL for ESP32-H2 microcontrollers"
 repository   = "https://github.com/esp-rs/esp-hal"
 license      = "MIT OR Apache-2.0"
@@ -26,8 +26,8 @@ categories = [
 ]
 
 [dependencies]
-esp-hal-common = { version = "0.12.0", features = ["esp32h2"], path = "../esp-hal-common" }
-embassy-time   = { version = "0.1.3",  features = ["nightly"], optional = true }
+esp-hal-common = { version = "0.13.0", features = ["esp32h2"], path = "../esp-hal-common" }
+embassy-time   = { version = "0.1.5",  features = ["nightly"], optional = true }
 
 [dev-dependencies]
 aes                = "0.8.3"
@@ -38,28 +38,33 @@ embedded-graphics  = "0.8.1"
 embedded-hal-1     = { version = "=1.0.0-rc.1", package = "embedded-hal" }
 embedded-hal-async = "=1.0.0-rc.1"
 embedded-can       = "0.4.1"
-embedded-io-async  = "0.5.0"
-esp-backtrace      = { version = "0.8.0", features = ["esp32h2", "panic-handler", "exception-handler", "print-uart"] }
-esp-hal-smartled   = { version = "0.5.0", features = ["esp32h2"], path = "../esp-hal-smartled" }
-esp-println        = { version = "0.6.0", features = ["esp32h2", "log"] }
+embedded-io-async  = "0.6.0"
+esp-backtrace      = { version = "0.9.0", features = ["esp32h2", "panic-handler", "exception-handler", "print-uart"] }
+esp-hal-smartled   = { version = "0.6.0", features = ["esp32h2"], path = "../esp-hal-smartled" }
+esp-println        = { version = "0.7.0", features = ["esp32h2"] }
 heapless           = "0.7.16"
 hmac               = { version = "0.12.1", default-features = false }
 lis3dh-async       = "0.8.0"
-sha2               = { version = "0.10.7", default-features = false}
+sha2               = { version = "0.10.8", default-features = false}
 smart-leds         = "0.3.0"
-ssd1306            = "0.8.1"
+ssd1306            = "0.8.4"
 static_cell        = { version = "1.2.0", features = ["nightly"] }
+hex-literal       = "0.4.1"
+elliptic-curve    = {version = "0.13.6", default-features = false, features = ["sec1"] }
+p192              = {version = "0.13.0", default-features = false, features = ["arithmetic"] }
+p256              = {version = "0.13.2", default-features = false, features = ["arithmetic"] }
+embassy-sync       = "0.3.0"
 
 [features]
 default              = ["rt", "vectored", "esp-hal-common/rv-zero-rtc-bss"]
 async                = ["esp-hal-common/async"]
 debug                = ["esp-hal-common/debug"]
-defmt                = ["esp-hal-common/defmt"]
+defmt                = ["esp-hal-common/defmt", "esp-println/defmt"]
 direct-boot          = ["esp-hal-common/rv-init-data", "esp-hal-common/rv-init-rtc-data"]
 direct-vectoring     = ["esp-hal-common/direct-vectoring"]
 eh1                  = ["esp-hal-common/eh1"]
 interrupt-preemption = ["esp-hal-common/interrupt-preemption"]
-log                  = ["esp-hal-common/log"]
+log                  = ["esp-hal-common/log", "esp-println/log"]
 rt                   = []
 ufmt                 = ["esp-hal-common/ufmt"]
 vectored             = ["esp-hal-common/vectored"]
@@ -101,9 +106,33 @@ name              = "embassy_wait"
 required-features = ["async", "embassy"]
 
 [[example]]
+name              = "embassy_rmt_tx"
+required-features = ["embassy", "async"]
+
+[[example]]
+name              = "embassy_rmt_rx"
+required-features = ["embassy", "async"]
+
+[[example]]
 name              = "interrupt_preemption"
 required-features = ["interrupt-preemption"]
 
 [[example]]
 name              = "direct-vectoring"
 required-features = ["direct-vectoring"]
+
+[[example]]
+name              = "embassy_i2s_sound"
+required-features = ["embassy", "async"]
+
+[[example]]
+name              = "embassy_i2s_read"
+required-features = ["embassy", "async"]
+
+[[example]]
+name              = "embassy_parl_io_tx"
+required-features = ["embassy", "async"]
+
+[[example]]
+name              = "embassy_parl_io_rx"
+required-features = ["embassy", "async"]

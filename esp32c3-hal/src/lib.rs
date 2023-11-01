@@ -16,7 +16,8 @@
 //! - `eh1` - Implement the traits defined in the `1.0.0-xxx` pre-releases of
 //!   [embedded-hal], [embedded-hal-nb], and [embedded-io]
 //! - `embassy` - Enable support for [embassy], a modern asynchronous embedded
-//!   framework
+//!   framework. One of `embassy-time-*` features must also be enabled when
+//!   using this feature.
 //! - `embassy-time-systick` - Enable the [embassy] time driver using the
 //!   `SYSTIMER` peripheral
 //! - `embassy-time-timg0` - Enable the [embassy] time driver using the `TIMG0`
@@ -79,11 +80,6 @@
 #![doc(html_logo_url = "https://avatars.githubusercontent.com/u/46717278")]
 
 pub use esp_hal_common::*;
-
-/// Common module for analog functions
-pub mod analog {
-    pub use esp_hal_common::analog::{AvailableAnalog, SarAdcExt};
-}
 
 extern "C" {
     cfg_if::cfg_if! {

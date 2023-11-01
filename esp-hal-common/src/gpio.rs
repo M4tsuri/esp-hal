@@ -25,7 +25,7 @@
 use core::{convert::Infallible, marker::PhantomData};
 
 use crate::peripherals::{GPIO, IO_MUX};
-#[cfg(xtensa)]
+#[cfg(any(xtensa, esp32c3))]
 pub(crate) use crate::rtc_pins;
 pub use crate::soc::gpio::*;
 pub(crate) use crate::{analog, gpio};
@@ -112,9 +112,17 @@ pub enum RtcFunction {
 }
 
 pub trait RTCPin: Pin {
+    #[cfg(xtensa)]
     fn rtc_number(&self) -> u8;
+    #[cfg(xtensa)]
     fn rtc_set_config(&mut self, input_enable: bool, mux: bool, func: RtcFunction);
+
     fn rtcio_pad_hold(&mut self, enable: bool);
+
+    // Unsafe because `level` needs to be a valid setting for the
+    // rtc_cntl.gpio_wakeup.gpio_pinX_int_type
+    #[cfg(esp32c3)]
+    unsafe fn apply_wakeup(&mut self, wakeup: bool, level: u8);
 }
 
 pub trait RTCPinWithResistors: RTCPin {
@@ -151,16 +159,6 @@ pub trait Pin {
     fn unlisten(&mut self);
 
     fn clear_interrupt(&mut self);
-
-    fn is_pcore_interrupt_set(&self) -> bool;
-
-    fn is_pcore_non_maskable_interrupt_set(&self) -> bool;
-
-    fn is_acore_interrupt_set(&self) -> bool;
-
-    fn is_acore_non_maskable_interrupt_set(&self) -> bool;
-
-    fn enable_hold(&mut self, on: bool);
 }
 
 pub trait InputPin: Pin {
@@ -247,6 +245,22 @@ pub trait InterruptStatusRegisterAccess {
 
     fn app_cpu_nmi_status_read() -> u32 {
         Self::pro_cpu_nmi_status_read()
+    }
+
+    fn interrupt_status_read() -> u32 {
+        match crate::get_core() {
+            crate::Cpu::ProCpu => Self::pro_cpu_interrupt_status_read(),
+            #[cfg(multi_core)]
+            crate::Cpu::AppCpu => Self::app_cpu_interrupt_status_read(),
+        }
+    }
+
+    fn nmi_status_read() -> u32 {
+        match crate::get_core() {
+            crate::Cpu::ProCpu => Self::pro_cpu_nmi_status_read(),
+            #[cfg(multi_core)]
+            crate::Cpu::AppCpu => Self::app_cpu_nmi_status_read(),
+        }
     }
 }
 
@@ -701,34 +715,6 @@ where
 
     fn clear_interrupt(&mut self) {
         <Self as GpioProperties>::Bank::write_interrupt_status_clear(1 << (GPIONUM % 32));
-    }
-
-    fn is_pcore_interrupt_set(&self) -> bool {
-        (<Self as GpioProperties>::InterruptStatus::pro_cpu_interrupt_status_read()
-            & (1 << (GPIONUM % 32)))
-            != 0
-    }
-
-    fn is_pcore_non_maskable_interrupt_set(&self) -> bool {
-        (<Self as GpioProperties>::InterruptStatus::pro_cpu_nmi_status_read()
-            & (1 << (GPIONUM % 32)))
-            != 0
-    }
-
-    fn is_acore_interrupt_set(&self) -> bool {
-        (<Self as GpioProperties>::InterruptStatus::app_cpu_interrupt_status_read()
-            & (1 << (GPIONUM % 32)))
-            != 0
-    }
-
-    fn is_acore_non_maskable_interrupt_set(&self) -> bool {
-        (<Self as GpioProperties>::InterruptStatus::app_cpu_nmi_status_read()
-            & (1 << (GPIONUM % 32)))
-            != 0
-    }
-
-    fn enable_hold(&mut self, _on: bool) {
-        todo!();
     }
 }
 
@@ -1475,6 +1461,11 @@ macro_rules! rtc_pins {
                 use crate::peripherals::RTC_IO;
                 let rtcio = unsafe{ &*RTC_IO::ptr() };
 
+                #[cfg(esp32s3)]
+                unsafe { crate::peripherals::SENS::steal() }.sar_peri_clk_gate_conf.modify(|_,w| w.iomux_clk_en().set_bit());
+                #[cfg(esp32s2)]
+                unsafe { crate::peripherals::SENS::steal() }.sar_io_mux_conf.modify(|_,w| w.iomux_clk_gate_en().set_bit());
+
                 // disable input
                 paste::paste!{
                     rtcio.$pin_reg.modify(|_,w| unsafe {w
@@ -1515,6 +1506,21 @@ macro_rules! rtc_pins {
                     }
                 }
             }
+
+            #[cfg(not(esp32))]
+            paste::paste!{
+                impl<MODE> crate::gpio::rtc_io::IntoLowPowerPin<$pin_num> for GpioPin<MODE, $pin_num> {
+                    fn into_low_power(mut self) -> crate::gpio::rtc_io::LowPowerPin<Unknown, $pin_num> {
+                        use crate::gpio::RTCPin;
+
+                        self.rtc_set_config(false, true, crate::gpio::RtcFunction::Rtc);
+
+                        crate::gpio::rtc_io::LowPowerPin {
+                            private: core::marker::PhantomData::default(),
+                        }
+                    }
+                }
+            }
         )?
     };
 
@@ -1525,6 +1531,47 @@ macro_rules! rtc_pins {
             crate::gpio::rtc_pins!($pin_num, $rtc_pin, $pin_reg, $prefix, $hold $(, $rue, $rde)?);
         )+
     };
+}
+
+#[cfg(esp32c3)]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! rtc_pins {
+    (
+        $pin_num:expr
+    ) => {
+        impl<MODE> crate::gpio::RTCPin for GpioPin<MODE, $pin_num> {
+            unsafe fn apply_wakeup(&mut self, wakeup: bool, level: u8) {
+                let rtc_cntl = unsafe { &*crate::peripherals::RTC_CNTL::ptr() };
+                paste::paste! {
+                    rtc_cntl.gpio_wakeup.modify(|_, w| w.[< gpio_pin $pin_num _wakeup_enable >]().bit(wakeup));
+                    rtc_cntl.gpio_wakeup.modify(|_, w| w.[< gpio_pin $pin_num _int_type >]().bits(level));
+                }
+            }
+
+            fn rtcio_pad_hold(&mut self, enable: bool) {
+                let rtc_cntl = unsafe { &*crate::peripherals::RTC_CNTL::ptr() };
+                paste::paste! {
+                    rtc_cntl.pad_hold.modify(|_, w| w.[< gpio_pin $pin_num _hold >]().bit(enable));
+                }
+            }
+        }
+
+        impl<MODE> crate::gpio::RTCPinWithResistors for GpioPin<MODE, $pin_num> {
+            fn rtcio_pullup(&mut self, enable: bool) {
+                let io_mux = unsafe { &*crate::peripherals::IO_MUX::ptr() };
+                io_mux.gpio[$pin_num].modify(|_, w| w.fun_wpu().bit(enable));
+            }
+
+            fn rtcio_pulldown(&mut self, enable: bool) {
+                let io_mux = unsafe { &*crate::peripherals::IO_MUX::ptr() };
+                io_mux.gpio[$pin_num].modify(|_, w| w.fun_wpd().bit(enable));
+            }
+        }
+
+    };
+
+    ( $( $pin_num:expr )+ ) => { $( crate::gpio::rtc_pins!($pin_num); )+ };
 }
 
 // Following code enables `into_analog`
@@ -1634,14 +1681,530 @@ macro_rules! analog {
     }
 }
 
-#[cfg(lp_io)]
-pub mod lp_gpio {
-    pub struct LowPowerPin<const PIN: u8> {
-        pub(crate) private: PhantomData<()>,
+#[cfg(soc_etm)]
+pub mod etm {
+    //! # Event Task Matrix Function
+    //!
+    //! ## Overview
+    //!
+    //! GPIO supports ETM function, that is, the ETM task of GPIO can be
+    //! triggered by the ETM event of any peripheral, or the ETM task of any
+    //! peripheral can be triggered by the ETM event of GPIO.
+    //!
+    //! The GPIO ETM provides eight task channels. The ETM tasks that each task
+    //! channel can receive are:
+    //! - SET: GPIO goes high when triggered
+    //! - CLEAR: GPIO goes low when triggered
+    //! - TOGGLE: GPIO toggle level when triggered.
+    //!
+    //! GPIO has eight event channels, and the ETM events that each event
+    //! channel can generate are:
+    //! - RISE_EDGE: Indicates that the output signal of the corresponding GPIO
+    //!   has a rising edge
+    //! - FALL_EDGE: Indicates that the output signal of the corresponding GPIO
+    //!   has a falling edge
+    //! - ANY_EDGE: Indicates that the output signal of the corresponding GPIO
+    //!   is reversed
+    //!
+    //! ## Example
+    //! ```no_run
+    //! let led_task = gpio_ext.channel0_task.toggle(&mut led);
+    //! let button_event = gpio_ext.channel0_event.falling_edge(button);
+    //! ```
+
+    use crate::peripheral::{Peripheral, PeripheralRef};
+
+    /// All the GPIO ETM channels
+    #[non_exhaustive]
+    pub struct GpioEtmChannels<'d> {
+        _gpio_sd: PeripheralRef<'d, crate::peripherals::GPIO_SD>,
+        pub channel0_task: GpioEtmTaskChannel<0>,
+        pub channel0_event: GpioEtmEventChannel<0>,
+        pub channel1_task: GpioEtmTaskChannel<1>,
+        pub channel1_event: GpioEtmEventChannel<1>,
+        pub channel2_task: GpioEtmTaskChannel<2>,
+        pub channel2_event: GpioEtmEventChannel<2>,
+        pub channel3_task: GpioEtmTaskChannel<3>,
+        pub channel3_event: GpioEtmEventChannel<3>,
+        pub channel4_task: GpioEtmTaskChannel<4>,
+        pub channel4_event: GpioEtmEventChannel<4>,
+        pub channel5_task: GpioEtmTaskChannel<5>,
+        pub channel5_event: GpioEtmEventChannel<5>,
+        pub channel6_task: GpioEtmTaskChannel<6>,
+        pub channel6_event: GpioEtmEventChannel<6>,
+        pub channel7_task: GpioEtmTaskChannel<7>,
+        pub channel7_event: GpioEtmEventChannel<7>,
     }
 
-    impl<const PIN: u8> LowPowerPin<PIN> {
-        pub fn output_enable(&mut self, enable: bool) {
+    impl<'d> GpioEtmChannels<'d> {
+        pub fn new(peripheral: impl Peripheral<P = crate::peripherals::GPIO_SD> + 'd) -> Self {
+            crate::into_ref!(peripheral);
+
+            Self {
+                _gpio_sd: peripheral,
+                channel0_task: GpioEtmTaskChannel {},
+                channel0_event: GpioEtmEventChannel {},
+                channel1_task: GpioEtmTaskChannel {},
+                channel1_event: GpioEtmEventChannel {},
+                channel2_task: GpioEtmTaskChannel {},
+                channel2_event: GpioEtmEventChannel {},
+                channel3_task: GpioEtmTaskChannel {},
+                channel3_event: GpioEtmEventChannel {},
+                channel4_task: GpioEtmTaskChannel {},
+                channel4_event: GpioEtmEventChannel {},
+                channel5_task: GpioEtmTaskChannel {},
+                channel5_event: GpioEtmEventChannel {},
+                channel6_task: GpioEtmTaskChannel {},
+                channel6_event: GpioEtmEventChannel {},
+                channel7_task: GpioEtmTaskChannel {},
+                channel7_event: GpioEtmEventChannel {},
+            }
+        }
+    }
+
+    /// An ETM controlled GPIO event
+    pub struct GpioEtmEventChannel<const C: u8> {}
+
+    impl<const C: u8> GpioEtmEventChannel<C> {
+        /// Trigger at rising edge
+        pub fn rising_edge<'d, PIN>(
+            self,
+            pin: impl Peripheral<P = PIN> + 'd,
+        ) -> GpioEtmEventChannelRising<'d, PIN, C>
+        where
+            PIN: super::Pin,
+        {
+            crate::into_ref!(pin);
+            enable_event_channel(C, pin.number());
+            GpioEtmEventChannelRising { _pin: pin }
+        }
+
+        /// Trigger at falling edge
+        pub fn falling_edge<'d, PIN>(
+            self,
+            pin: impl Peripheral<P = PIN> + 'd,
+        ) -> GpioEtmEventChannelFalling<'d, PIN, C>
+        where
+            PIN: super::Pin,
+        {
+            crate::into_ref!(pin);
+            enable_event_channel(C, pin.number());
+            GpioEtmEventChannelFalling { _pin: pin }
+        }
+
+        /// Trigger at any edge
+        pub fn any_edge<'d, PIN>(
+            self,
+            pin: impl Peripheral<P = PIN> + 'd,
+        ) -> GpioEtmEventChannelAny<'d, PIN, C>
+        where
+            PIN: super::Pin,
+        {
+            crate::into_ref!(pin);
+            enable_event_channel(C, pin.number());
+            GpioEtmEventChannelAny { _pin: pin }
+        }
+    }
+
+    /// Event for rising edge
+    #[non_exhaustive]
+    pub struct GpioEtmEventChannelRising<'d, PIN, const C: u8>
+    where
+        PIN: super::Pin,
+    {
+        _pin: PeripheralRef<'d, PIN>,
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::private::Sealed for GpioEtmEventChannelRising<'d, PIN, C> where
+        PIN: super::Pin
+    {
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::EtmEvent for GpioEtmEventChannelRising<'d, PIN, C>
+    where
+        PIN: super::Pin,
+    {
+        fn id(&self) -> u8 {
+            1 + C
+        }
+    }
+
+    /// Event for falling edge
+    #[non_exhaustive]
+    pub struct GpioEtmEventChannelFalling<'d, PIN, const C: u8>
+    where
+        PIN: super::Pin,
+    {
+        _pin: PeripheralRef<'d, PIN>,
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::private::Sealed for GpioEtmEventChannelFalling<'d, PIN, C> where
+        PIN: super::Pin
+    {
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::EtmEvent for GpioEtmEventChannelFalling<'d, PIN, C>
+    where
+        PIN: super::Pin,
+    {
+        fn id(&self) -> u8 {
+            9 + C
+        }
+    }
+
+    /// Event for any edge
+    #[non_exhaustive]
+    pub struct GpioEtmEventChannelAny<'d, PIN, const C: u8>
+    where
+        PIN: super::Pin,
+    {
+        _pin: PeripheralRef<'d, PIN>,
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::private::Sealed for GpioEtmEventChannelAny<'d, PIN, C> where
+        PIN: super::Pin
+    {
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::EtmEvent for GpioEtmEventChannelAny<'d, PIN, C>
+    where
+        PIN: super::Pin,
+    {
+        fn id(&self) -> u8 {
+            17 + C
+        }
+    }
+
+    /// An ETM controlled GPIO task
+    pub struct GpioEtmTaskChannel<const C: u8> {}
+
+    impl<const C: u8> GpioEtmTaskChannel<C> {
+        // In theory we could have multiple pins assigned to the same task. Not sure how
+        // useful that would be. If we want to support it, the easiest would be
+        // to offer additional functions like `set2`, `set3` etc. where the
+        // number is the pin-count
+
+        /// Task to set a high level
+        pub fn set<'d, PIN>(self, pin: impl Peripheral<P = PIN> + 'd) -> GpioEtmTaskSet<'d, PIN, C>
+        where
+            PIN: super::Pin,
+        {
+            crate::into_ref!(pin);
+            enable_task_channel(C, pin.number());
+            GpioEtmTaskSet { _pin: pin }
+        }
+
+        /// Task to set a low level
+        pub fn clear<'d, PIN>(
+            self,
+            pin: impl Peripheral<P = PIN> + 'd,
+        ) -> GpioEtmTaskClear<'d, PIN, C>
+        where
+            PIN: super::Pin,
+        {
+            crate::into_ref!(pin);
+            enable_task_channel(C, pin.number());
+            GpioEtmTaskClear { _pin: pin }
+        }
+
+        /// Task to toggle the level
+        pub fn toggle<'d, PIN>(
+            self,
+            pin: impl Peripheral<P = PIN> + 'd,
+        ) -> GpioEtmTaskToggle<'d, PIN, C>
+        where
+            PIN: super::Pin,
+        {
+            crate::into_ref!(pin);
+            enable_task_channel(C, pin.number());
+            GpioEtmTaskToggle { _pin: pin }
+        }
+    }
+
+    /// Task for set operation
+    #[non_exhaustive]
+    pub struct GpioEtmTaskSet<'d, PIN, const C: u8>
+    where
+        PIN: super::Pin,
+    {
+        _pin: PeripheralRef<'d, PIN>,
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::private::Sealed for GpioEtmTaskSet<'d, PIN, C> where
+        PIN: super::Pin
+    {
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::EtmTask for GpioEtmTaskSet<'d, PIN, C>
+    where
+        PIN: super::Pin,
+    {
+        fn id(&self) -> u8 {
+            1 + C
+        }
+    }
+
+    /// Task for clear operation
+    #[non_exhaustive]
+    pub struct GpioEtmTaskClear<'d, PIN, const C: u8> {
+        _pin: PeripheralRef<'d, PIN>,
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::private::Sealed for GpioEtmTaskClear<'d, PIN, C> where
+        PIN: super::Pin
+    {
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::EtmTask for GpioEtmTaskClear<'d, PIN, C>
+    where
+        PIN: super::Pin,
+    {
+        fn id(&self) -> u8 {
+            9 + C
+        }
+    }
+
+    /// Task for toggle operation
+    #[non_exhaustive]
+    pub struct GpioEtmTaskToggle<'d, PIN, const C: u8> {
+        _pin: PeripheralRef<'d, PIN>,
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::private::Sealed for GpioEtmTaskToggle<'d, PIN, C> where
+        PIN: super::Pin
+    {
+    }
+
+    impl<'d, PIN, const C: u8> crate::etm::EtmTask for GpioEtmTaskToggle<'d, PIN, C>
+    where
+        PIN: super::Pin,
+    {
+        fn id(&self) -> u8 {
+            17 + C
+        }
+    }
+
+    fn enable_task_channel(channel: u8, pin: u8) {
+        let gpio_sd = unsafe { crate::peripherals::GPIO_SD::steal() };
+        let ptr = unsafe { gpio_sd.etm_task_p0_cfg.as_ptr().add(pin as usize / 4) };
+        let shift = 8 * (pin as usize % 4);
+        // bit 0 = en, bit 1-3 = channel
+        unsafe {
+            ptr.write_volatile(
+                ptr.read_volatile() & !(0xf << shift)
+                    | 1 << shift
+                    | (channel as u32) << (shift + 1),
+            );
+        }
+    }
+
+    fn enable_event_channel(channel: u8, pin: u8) {
+        let gpio_sd = unsafe { crate::peripherals::GPIO_SD::steal() };
+        gpio_sd.etm_event_ch_cfg[channel as usize].modify(|_, w| w.etm_ch0_event_en().clear_bit());
+        gpio_sd.etm_event_ch_cfg[channel as usize]
+            .modify(|_, w| w.etm_ch0_event_sel().variant(pin));
+        gpio_sd.etm_event_ch_cfg[channel as usize].modify(|_, w| w.etm_ch0_event_en().set_bit());
+    }
+}
+
+#[cfg(all(rtc_io, not(esp32)))]
+pub mod rtc_io {
+    //! RTC IO
+    //!
+    //! # Overview
+    //!
+    //! The hardware provides a couple of GPIO pins with low power (LP)
+    //! capabilities and analog functions. These pins can be controlled by
+    //! either IO MUX or RTC IO.
+    //!
+    //! If controlled by RTC IO, these pins will bypass IO MUX and GPIO
+    //! matrix for the use by ULP and peripherals in RTC system.
+    //!
+    //! When configured as RTC GPIOs, the pins can still be controlled by ULP or
+    //! the peripherals in RTC system during chip Deep-sleep, and wake up the
+    //! chip from Deep-sleep.
+    //!
+    //! # Example
+    //! ```no_run
+    //! let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
+    //! // configure GPIO 1 as ULP output pin
+    //! let lp_pin = io.pins.gpio1.into_low_power().into_push_pull_output();
+    //! ```
+
+    use core::marker::PhantomData;
+
+    use super::{Floating, Input, Output, PullDown, PullUp, PushPull, Unknown};
+
+    /// A GPIO pin configured for low power operation
+    pub struct LowPowerPin<MODE, const PIN: u8> {
+        pub(crate) private: PhantomData<MODE>,
+    }
+
+    /// Configures a pin for use as a low power pin
+    pub trait IntoLowPowerPin<const PIN: u8> {
+        fn into_low_power(self) -> LowPowerPin<Unknown, { PIN }>;
+    }
+
+    impl<MODE, const PIN: u8> LowPowerPin<MODE, PIN> {
+        #[doc(hidden)]
+        pub fn output_enable(&self, enable: bool) {
+            let rtc_io = unsafe { crate::peripherals::RTC_IO::steal() };
+            if enable {
+                // TODO align PAC
+                #[cfg(esp32s2)]
+                rtc_io
+                    .rtc_gpio_enable_w1ts
+                    .write(|w| w.reg_rtcio_reg_gpio_enable_w1ts().variant(1 << PIN));
+
+                #[cfg(esp32s3)]
+                rtc_io
+                    .rtc_gpio_enable_w1ts
+                    .write(|w| w.rtc_gpio_enable_w1ts().variant(1 << PIN));
+            } else {
+                rtc_io
+                    .enable_w1tc
+                    .write(|w| w.enable_w1tc().variant(1 << PIN));
+            }
+        }
+
+        fn input_enable(&self, enable: bool) {
+            get_pin_reg(PIN).modify(|_, w| w.fun_ie().bit(enable));
+        }
+
+        fn pullup_enable(&self, enable: bool) {
+            get_pin_reg(PIN).modify(|_, w| w.rue().bit(enable));
+        }
+
+        fn pulldown_enable(&self, enable: bool) {
+            get_pin_reg(PIN).modify(|_, w| w.rde().bit(enable));
+        }
+
+        #[doc(hidden)]
+        pub fn set_level(&mut self, level: bool) {
+            let rtc_io = unsafe { &*crate::peripherals::RTC_IO::PTR };
+
+            // TODO align PACs
+            #[cfg(esp32s2)]
+            if level {
+                rtc_io
+                    .rtc_gpio_out_w1ts
+                    .write(|w| w.gpio_out_data_w1ts().variant(1 << PIN));
+            } else {
+                rtc_io
+                    .rtc_gpio_out_w1tc
+                    .write(|w| w.gpio_out_data_w1tc().variant(1 << PIN));
+            }
+
+            #[cfg(esp32s3)]
+            if level {
+                rtc_io
+                    .rtc_gpio_out_w1ts
+                    .write(|w| w.rtc_gpio_out_data_w1ts().variant(1 << PIN));
+            } else {
+                rtc_io
+                    .rtc_gpio_out_w1tc
+                    .write(|w| w.rtc_gpio_out_data_w1tc().variant(1 << PIN));
+            }
+        }
+
+        #[doc(hidden)]
+        pub fn get_level(&self) -> bool {
+            let rtc_io = unsafe { &*crate::peripherals::RTC_IO::PTR };
+            (rtc_io.rtc_gpio_in.read().bits() & 1 << PIN) != 0
+        }
+
+        /// Configures the pin as an input with the internal pull-up resistor
+        /// enabled.
+        pub fn into_pull_up_input(self) -> LowPowerPin<Input<PullUp>, PIN> {
+            self.input_enable(true);
+            self.pullup_enable(true);
+            self.pulldown_enable(false);
+            LowPowerPin {
+                private: PhantomData::default(),
+            }
+        }
+
+        /// Configures the pin as an input with the internal pull-down resistor
+        /// enabled.
+        pub fn into_pull_down_input(self) -> LowPowerPin<Input<PullDown>, PIN> {
+            self.input_enable(true);
+            self.pullup_enable(false);
+            self.pulldown_enable(true);
+            LowPowerPin {
+                private: PhantomData::default(),
+            }
+        }
+
+        /// Configures the pin as a floating input pin.
+        pub fn into_floating_input(self) -> LowPowerPin<Input<Floating>, PIN> {
+            self.input_enable(true);
+            self.pullup_enable(false);
+            self.pulldown_enable(false);
+            LowPowerPin {
+                private: PhantomData::default(),
+            }
+        }
+
+        /// Configures the pin as an output pin.
+        pub fn into_push_pull_output(self) -> LowPowerPin<Output<PushPull>, PIN> {
+            self.output_enable(true);
+            LowPowerPin {
+                private: PhantomData::default(),
+            }
+        }
+    }
+
+    #[cfg(esp32s3)]
+    #[inline(always)]
+    fn get_pin_reg(pin: u8) -> &'static crate::peripherals::rtc_io::TOUCH_PAD0 {
+        let rtc_io = unsafe { &*crate::peripherals::RTC_IO::PTR };
+        unsafe { core::mem::transmute((rtc_io.touch_pad0.as_ptr()).add(pin as usize)) }
+    }
+
+    #[cfg(esp32s2)]
+    #[inline(always)]
+    fn get_pin_reg(pin: u8) -> &'static crate::peripherals::rtc_io::TOUCH_PAD {
+        let rtc_io = unsafe { &*crate::peripherals::RTC_IO::PTR };
+        unsafe { core::mem::transmute((rtc_io.touch_pad[0].as_ptr()).add(pin as usize)) }
+    }
+}
+
+#[cfg(lp_io)]
+pub mod lp_gpio {
+    //! Low Power IO (LP_IO)
+    //!
+    //! # Overview
+    //!
+    //! The hardware provides a couple of GPIO pins with low power (LP)
+    //! capabilities and analog functions. These pins can be controlled by
+    //! either IO MUX or LP IO MUX.
+    //!
+    //! If controlled by LP IO MUX, these pins will bypass IO MUX and GPIO
+    //! matrix for the use by ULP and peripherals in LP system.
+    //!
+    //! When configured as LP GPIOs, the pins can still be controlled by ULP or
+    //! the peripherals in LP system during chip Deep-sleep, and wake up the
+    //! chip from Deep-sleep.
+    //!
+    //! # Example
+    //! ```no_run
+    //! let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
+    //! // configure GPIO 1 as LP output pin
+    //! let lp_pin = io.pins.gpio1.into_low_power().into_push_pull_output();
+    //! ```
+
+    use core::marker::PhantomData;
+
+    use super::{Floating, Input, Output, PullDown, PullUp, PushPull, Unknown};
+
+    /// A GPIO pin configured for low power operation
+    pub struct LowPowerPin<MODE, const PIN: u8> {
+        pub(crate) private: PhantomData<MODE>,
+    }
+
+    impl<MODE, const PIN: u8> LowPowerPin<MODE, PIN> {
+        #[doc(hidden)]
+        pub fn output_enable(&self, enable: bool) {
             let lp_io = unsafe { &*crate::peripherals::LP_IO::PTR };
             if enable {
                 lp_io
@@ -1654,18 +2217,19 @@ pub mod lp_gpio {
             }
         }
 
-        pub fn input_enable(&mut self, enable: bool) {
+        fn input_enable(&self, enable: bool) {
             get_pin_reg(PIN).modify(|_, w| w.lp_gpio0_fun_ie().bit(enable));
         }
 
-        pub fn pullup_enable(&mut self, enable: bool) {
+        fn pullup_enable(&self, enable: bool) {
             get_pin_reg(PIN).modify(|_, w| w.lp_gpio0_fun_wpu().bit(enable));
         }
 
-        pub fn pulldown_enable(&mut self, enable: bool) {
+        fn pulldown_enable(&self, enable: bool) {
             get_pin_reg(PIN).modify(|_, w| w.lp_gpio0_fun_wpd().bit(enable));
         }
 
+        #[doc(hidden)]
         pub fn set_level(&mut self, level: bool) {
             let lp_io = unsafe { &*crate::peripherals::LP_IO::PTR };
             if level {
@@ -1679,9 +2243,50 @@ pub mod lp_gpio {
             }
         }
 
+        #[doc(hidden)]
         pub fn get_level(&self) -> bool {
             let lp_io = unsafe { &*crate::peripherals::LP_IO::PTR };
             (lp_io.in_.read().lp_gpio_in_data_next().bits() & 1 << PIN) != 0
+        }
+
+        /// Configures the pin as an input with the internal pull-up resistor
+        /// enabled.
+        pub fn into_pull_up_input(self) -> LowPowerPin<Input<PullUp>, PIN> {
+            self.input_enable(true);
+            self.pullup_enable(true);
+            self.pulldown_enable(false);
+            LowPowerPin {
+                private: PhantomData::default(),
+            }
+        }
+
+        /// Configures the pin as an input with the internal pull-down resistor
+        /// enabled.
+        pub fn into_pull_down_input(self) -> LowPowerPin<Input<PullDown>, PIN> {
+            self.input_enable(true);
+            self.pullup_enable(false);
+            self.pulldown_enable(true);
+            LowPowerPin {
+                private: PhantomData::default(),
+            }
+        }
+
+        /// Configures the pin as a floating input pin.
+        pub fn into_floating_input(self) -> LowPowerPin<Input<Floating>, PIN> {
+            self.input_enable(true);
+            self.pullup_enable(false);
+            self.pulldown_enable(false);
+            LowPowerPin {
+                private: PhantomData::default(),
+            }
+        }
+
+        /// Configures the pin as an output pin.
+        pub fn into_push_pull_output(self) -> LowPowerPin<Output<PushPull>, PIN> {
+            self.output_enable(true);
+            LowPowerPin {
+                private: PhantomData::default(),
+            }
         }
     }
 
@@ -1704,8 +2309,9 @@ pub mod lp_gpio {
         unsafe { core::mem::transmute((lp_io.gpio0.as_ptr()).add(pin as usize)) }
     }
 
+    /// Configures a pin for use as a low power pin
     pub trait IntoLowPowerPin<const PIN: u8> {
-        fn into_low_power(self) -> LowPowerPin<{ PIN }>;
+        fn into_low_power(self) -> LowPowerPin<Unknown, { PIN }>;
     }
 
     #[doc(hidden)]
@@ -1717,7 +2323,7 @@ pub mod lp_gpio {
             paste::paste!{
                 $(
                     impl<MODE> crate::gpio::lp_gpio::IntoLowPowerPin<$gpionum> for GpioPin<MODE, $gpionum> {
-                        fn into_low_power(self) -> crate::gpio::lp_gpio::LowPowerPin<$gpionum> {
+                        fn into_low_power(self) -> crate::gpio::lp_gpio::LowPowerPin<Unknown, $gpionum> {
                             crate::gpio::lp_gpio::init_low_power_pin($gpionum);
                             crate::gpio::lp_gpio::LowPowerPin {
                                 private: core::marker::PhantomData::default(),
@@ -1728,8 +2334,6 @@ pub mod lp_gpio {
             }
         }
     }
-
-    use core::marker::PhantomData;
 
     pub(crate) use lp_gpio;
 }
@@ -1826,41 +2430,13 @@ mod asynch {
 
     #[interrupt]
     unsafe fn GPIO() {
-        let mut intrs = match crate::get_core() {
-            crate::Cpu::ProCpu => {
-                InterruptStatusRegisterAccessBank0::pro_cpu_interrupt_status_read() as u64
-            }
-            #[cfg(multi_core)]
-            crate::Cpu::AppCpu => {
-                InterruptStatusRegisterAccessBank0::app_cpu_interrupt_status_read() as u64
-            }
-        };
+        let intrs_bank0 = InterruptStatusRegisterAccessBank0::interrupt_status_read();
 
         #[cfg(any(esp32, esp32s2, esp32s3))]
-        match crate::get_core() {
-            crate::Cpu::ProCpu => {
-                intrs |= (InterruptStatusRegisterAccessBank1::pro_cpu_interrupt_status_read()
-                    as u64)
-                    << 32
-            }
-            #[cfg(multi_core)]
-            crate::Cpu::AppCpu => {
-                intrs |= (InterruptStatusRegisterAccessBank1::app_cpu_interrupt_status_read()
-                    as u64)
-                    << 32
-            }
-        };
+        let intrs_bank1 = InterruptStatusRegisterAccessBank1::interrupt_status_read();
 
-        trace!(
-            "Handling interrupt on {:?} - {:064b}",
-            crate::get_core(),
-            intrs
-        );
-
-        let mut intr_bits = intrs;
+        let mut intr_bits = intrs_bank0;
         while intr_bits != 0 {
-            // TODO: we should probably call `leading_zeros` on Xtensa
-            // when that lowers to NSAU.
             let pin_nr = intr_bits.trailing_zeros();
             set_int_enable(pin_nr as u8, 0, 0, false);
             PIN_WAKERS[pin_nr as usize].wake(); // wake task
@@ -1868,8 +2444,18 @@ mod asynch {
         }
 
         // clear interrupt bits
-        Bank0GpioRegisterAccess::write_interrupt_status_clear(intrs as u32);
+        Bank0GpioRegisterAccess::write_interrupt_status_clear(intrs_bank0);
+
         #[cfg(any(esp32, esp32s2, esp32s3))]
-        Bank1GpioRegisterAccess::write_interrupt_status_clear((intrs >> 32) as u32);
+        {
+            let mut intr_bits = intrs_bank1;
+            while intr_bits != 0 {
+                let pin_nr = intr_bits.trailing_zeros();
+                set_int_enable(pin_nr as u8 + 32, 0, 0, false);
+                PIN_WAKERS[pin_nr as usize + 32].wake(); // wake task
+                intr_bits -= 1 << pin_nr;
+            }
+            Bank1GpioRegisterAccess::write_interrupt_status_clear(intrs_bank1);
+        }
     }
 }

@@ -24,7 +24,11 @@ use esp32_hal::{
     pdma::Dma,
     peripherals::Peripherals,
     prelude::*,
-    spi::{Address, Command, Spi, SpiDataMode, SpiMode},
+    spi::{
+        master::{prelude::*, Address, Command, Spi},
+        SpiDataMode,
+        SpiMode,
+    },
     Delay,
 };
 use esp_backtrace as _;
@@ -33,7 +37,7 @@ use esp_println::{print, println};
 #[entry]
 fn main() -> ! {
     let peripherals = Peripherals::take();
-    let mut system = peripherals.DPORT.split();
+    let system = peripherals.SYSTEM.split();
     let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
 
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
@@ -44,7 +48,7 @@ fn main() -> ! {
     let sio3 = io.pins.gpio16;
     let cs = io.pins.gpio4;
 
-    let dma = Dma::new(system.dma, &mut system.peripheral_clock_control);
+    let dma = Dma::new(system.dma);
     let dma_channel = dma.spi2channel;
 
     let mut descriptors = [0u32; 8 * 3];
@@ -60,7 +64,6 @@ fn main() -> ! {
         Some(cs),
         100u32.kHz(),
         SpiMode::Mode0,
-        &mut system.peripheral_clock_control,
         &clocks,
     )
     .with_dma(dma_channel.configure(

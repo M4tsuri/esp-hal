@@ -24,7 +24,10 @@ use esp32s2_hal::{
     gpio::IO,
     peripherals::Peripherals,
     prelude::*,
-    spi::{Spi, SpiBusController, SpiMode},
+    spi::{
+        master::{prelude::*, Spi, SpiBusController},
+        SpiMode,
+    },
     Delay,
 };
 use esp_backtrace as _;
@@ -33,7 +36,7 @@ use esp_println::{print, println};
 #[entry]
 fn main() -> ! {
     let peripherals = Peripherals::take();
-    let mut system = peripherals.SYSTEM.split();
+    let system = peripherals.SYSTEM.split();
     let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
 
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
@@ -48,7 +51,6 @@ fn main() -> ! {
         miso,
         1000u32.kHz(),
         SpiMode::Mode0,
-        &mut system.peripheral_clock_control,
         &clocks,
     ));
     let mut spi_device_1 = spi_controller.add_device(io.pins.gpio1);

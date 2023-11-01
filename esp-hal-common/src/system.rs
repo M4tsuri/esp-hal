@@ -28,16 +28,10 @@
 //! let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
 //! ```
 
-use crate::peripheral::PeripheralRef;
+use crate::{peripheral::PeripheralRef, peripherals::SYSTEM};
 
-#[cfg(esp32)]
-type SystemPeripheral = crate::peripherals::DPORT;
-#[cfg(any(esp32c6, esp32h2))]
-type SystemPeripheral = crate::peripherals::PCR;
 #[cfg(any(esp32c6, esp32h2))]
 type IntPri = crate::peripherals::INTPRI;
-#[cfg(not(any(esp32, esp32c6, esp32h2)))]
-type SystemPeripheral = crate::peripherals::SYSTEM;
 
 pub enum SoftwareInterrupt {
     SoftwareInterrupt0,
@@ -46,7 +40,7 @@ pub enum SoftwareInterrupt {
     SoftwareInterrupt3,
 }
 
-/// Peripherals which can be enabled via [PeripheralClockControl]
+/// Peripherals which can be enabled via `PeripheralClockControl`
 pub enum Peripheral {
     #[cfg(spi2)]
     Spi2,
@@ -106,6 +100,12 @@ pub enum Peripheral {
     ParlIo,
     #[cfg(hmac)]
     Hmac,
+    #[cfg(ecc)]
+    Ecc,
+    #[cfg(soc_etm)]
+    Etm,
+    #[cfg(trace)]
+    Trace,
 }
 
 pub struct SoftwareInterruptControl {
@@ -115,7 +115,7 @@ pub struct SoftwareInterruptControl {
 impl SoftwareInterruptControl {
     pub fn raise(&mut self, interrupt: SoftwareInterrupt) {
         #[cfg(not(any(esp32c6, esp32h2)))]
-        let system = unsafe { &*SystemPeripheral::PTR };
+        let system = unsafe { &*SYSTEM::PTR };
         #[cfg(any(esp32c6, esp32h2))]
         let system = unsafe { &*IntPri::PTR };
 
@@ -145,7 +145,7 @@ impl SoftwareInterruptControl {
 
     pub fn reset(&mut self, interrupt: SoftwareInterrupt) {
         #[cfg(not(any(esp32c6, esp32h2)))]
-        let system = unsafe { &*SystemPeripheral::PTR };
+        let system = unsafe { &*SYSTEM::PTR };
         #[cfg(any(esp32c6, esp32h2))]
         let system = unsafe { &*IntPri::PTR };
 
@@ -175,15 +175,13 @@ impl SoftwareInterruptControl {
 }
 
 /// Controls the enablement of peripheral clocks.
-pub struct PeripheralClockControl {
-    _private: (),
-}
+pub(crate) struct PeripheralClockControl;
 
 #[cfg(not(any(esp32c6, esp32h2)))]
 impl PeripheralClockControl {
     /// Enables and resets the given peripheral
-    pub fn enable(&mut self, peripheral: Peripheral) {
-        let system = unsafe { &*SystemPeripheral::PTR };
+    pub(crate) fn enable(peripheral: Peripheral) {
+        let system = unsafe { &*SYSTEM::PTR };
 
         #[cfg(not(esp32))]
         let (perip_clk_en0, perip_rst_en0) = { (&system.perip_clk_en0, &system.perip_rst_en0) };
@@ -200,7 +198,7 @@ impl PeripheralClockControl {
         #[cfg(any(esp32c2, esp32c3, esp32s2, esp32s3))]
         let (perip_clk_en1, perip_rst_en1) = { (&system.perip_clk_en1, &system.perip_rst_en1) };
 
-        match peripheral {
+        critical_section::with(|_cs| match peripheral {
             #[cfg(spi2)]
             Peripheral::Spi2 => {
                 perip_clk_en0.modify(|_, w| w.spi2_clk_en().set_bit());
@@ -378,15 +376,20 @@ impl PeripheralClockControl {
                 perip_clk_en1.modify(|_, w| w.crypto_hmac_clk_en().set_bit());
                 perip_rst_en1.modify(|_, w| w.crypto_hmac_rst().clear_bit());
             }
-        }
+            #[cfg(ecc)]
+            Peripheral::Ecc => {
+                perip_clk_en1.modify(|_, w| w.crypto_ecc_clk_en().set_bit());
+                perip_rst_en1.modify(|_, w| w.crypto_ecc_rst().clear_bit());
+            }
+        });
     }
 }
 
 #[cfg(any(esp32c6, esp32h2))]
 impl PeripheralClockControl {
     /// Enables and resets the given peripheral
-    pub fn enable(&mut self, peripheral: Peripheral) {
-        let system = unsafe { &*SystemPeripheral::PTR };
+    pub(crate) fn enable(peripheral: Peripheral) {
+        let system = unsafe { &*SYSTEM::PTR };
 
         match peripheral {
             #[cfg(spi2)]
@@ -541,6 +544,23 @@ impl PeripheralClockControl {
                 system.hmac_conf.modify(|_, w| w.hmac_clk_en().set_bit());
                 system.hmac_conf.modify(|_, w| w.hmac_rst_en().clear_bit());
             }
+            #[cfg(ecc)]
+            Peripheral::Ecc => {
+                system.ecc_conf.modify(|_, w| w.ecc_clk_en().set_bit());
+                system.ecc_conf.modify(|_, w| w.ecc_rst_en().clear_bit());
+            }
+            #[cfg(soc_etm)]
+            Peripheral::Etm => {
+                system.etm_conf.modify(|_, w| w.etm_clk_en().set_bit());
+                system.etm_conf.modify(|_, w| w.etm_rst_en().clear_bit());
+            }
+            #[cfg(trace)]
+            Peripheral::Trace => {
+                system.trace_conf.modify(|_, w| w.trace_clk_en().set_bit());
+                system
+                    .trace_conf
+                    .modify(|_, w| w.trace_rst_en().clear_bit());
+            }
         }
     }
 }
@@ -598,8 +618,7 @@ pub trait RadioClockController {
 
 /// The SYSTEM/DPORT splitted into it's different logical parts.
 pub struct SystemParts<'d> {
-    _private: PeripheralRef<'d, SystemPeripheral>,
-    pub peripheral_clock_control: PeripheralClockControl,
+    _private: PeripheralRef<'d, SYSTEM>,
     pub clock_control: SystemClockControl,
     pub cpu_control: CpuControl,
     #[cfg(pdma)]
@@ -617,13 +636,12 @@ pub trait SystemExt<'d> {
     fn split(self) -> Self::Parts;
 }
 
-impl<'d, T: crate::peripheral::Peripheral<P = SystemPeripheral> + 'd> SystemExt<'d> for T {
+impl<'d, T: crate::peripheral::Peripheral<P = SYSTEM> + 'd> SystemExt<'d> for T {
     type Parts = SystemParts<'d>;
 
     fn split(self) -> Self::Parts {
         Self::Parts {
             _private: self.into_ref(),
-            peripheral_clock_control: PeripheralClockControl { _private: () },
             clock_control: SystemClockControl { _private: () },
             cpu_control: CpuControl { _private: () },
             #[cfg(pdma)]

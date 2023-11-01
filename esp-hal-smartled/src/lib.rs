@@ -12,13 +12,7 @@
 //!
 //! ```rust,ignore
 //! let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
-//! let rmt = Rmt::new(
-//!     peripherals.RMT,
-//!     80u32.MHz(),
-//!     &mut system.peripheral_clock_control,
-//!     &clocks,
-//! )
-//! .unwrap();
+//! let rmt = Rmt::new(peripherals.RMT, 80u32.MHz(), &clocks).unwrap();
 //!
 //! let led = <smartLedAdapter!(0, 1)>::new(rmt.channel0, io.pins.gpio0);
 //! ```
@@ -68,6 +62,7 @@ const SK68XX_T1L_CYCLES: u16 = ((SK68XX_T1L_NS * (SOURCE_CLK_FREQ / 1_000_000)) 
 /// All types of errors that can happen during the conversion and transmission
 /// of LED commands
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum LedAdapterError {
     /// Raised in the event that the provided data container is not large enough
     BufferSizeExceeded,

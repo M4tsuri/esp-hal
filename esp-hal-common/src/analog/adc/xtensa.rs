@@ -112,23 +112,6 @@ impl Attenuation {
         Attenuation::Attenuation6dB,
         Attenuation::Attenuation11dB,
     ];
-
-    /// Reference voltage in millivolts
-    ///
-    /// Vref = 10 ^ (Att / 20) * Vref0
-    /// where Vref0 = 1.1 V, Att - attenuation in dB
-    ///
-    /// To convert raw value to millivolts use formula:
-    /// V = D * Vref / 2 ^ R
-    /// where D - raw ADC value, R - resolution in bits
-    pub const fn ref_mv(&self) -> u16 {
-        match self {
-            Attenuation::Attenuation0dB => 1100,
-            Attenuation::Attenuation2p5dB => 1467,
-            Attenuation::Attenuation6dB => 2195,
-            Attenuation::Attenuation11dB => 3903,
-        }
-    }
 }
 
 pub struct AdcPin<PIN, ADCI, CS = ()> {
@@ -679,16 +662,15 @@ impl AdcCalEfuse for ADC2 {
     }
 }
 
-impl<'d, ADCI, WORD, PIN, CS> OneShot<ADCI, WORD, AdcPin<PIN, ADCI, CS>> for ADC<'d, ADCI>
+impl<'d, ADCI, PIN, CS> OneShot<ADCI, u16, AdcPin<PIN, ADCI, CS>> for ADC<'d, ADCI>
 where
-    WORD: From<u16>,
     PIN: Channel<ADCI, ID = u8>,
     ADCI: RegisterAccess,
     CS: AdcCalScheme<ADCI>,
 {
     type Error = ();
 
-    fn read(&mut self, pin: &mut AdcPin<PIN, ADCI, CS>) -> nb::Result<WORD, Self::Error> {
+    fn read(&mut self, pin: &mut AdcPin<PIN, ADCI, CS>) -> nb::Result<u16, Self::Error> {
         if self.attenuations[AdcPin::<PIN, ADCI>::channel() as usize] == None {
             panic!(
                 "Channel {} is not configured reading!",
@@ -729,7 +711,7 @@ where
         // Mark that no conversions are currently in progress
         self.active_channel = None;
 
-        Ok(converted_value.into())
+        Ok(converted_value)
     }
 }
 

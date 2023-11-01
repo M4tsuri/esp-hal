@@ -149,25 +149,6 @@ impl Attenuation {
         Attenuation::Attenuation6dB,
         Attenuation::Attenuation11dB,
     ];
-
-    /// Reference voltage in millivolts
-    ///
-    /// Vref = 10 ^ (Att / 20) * Vref0
-    /// where Vref0 = 1.1 V, Att - attenuation in dB
-    ///
-    /// To convert raw value to millivolts use formula:
-    /// V = D * Vref / 2 ^ R
-    /// where D - raw ADC value, R - resolution in bits
-    pub const fn ref_mv(&self) -> u16 {
-        match self {
-            Attenuation::Attenuation0dB => 1100,
-            #[cfg(not(esp32c2))]
-            Attenuation::Attenuation2p5dB => 1467,
-            #[cfg(not(esp32c2))]
-            Attenuation::Attenuation6dB => 2195,
-            Attenuation::Attenuation11dB => 3903,
-        }
-    }
 }
 
 pub struct AdcPin<PIN, ADCI, CS = ()> {
@@ -556,11 +537,10 @@ where
     ADCI: RegisterAccess + 'd,
 {
     pub fn adc(
-        peripheral_clock_controller: &mut PeripheralClockControl,
         adc_instance: impl crate::peripheral::Peripheral<P = ADCI> + 'd,
         config: AdcConfig<ADCI>,
     ) -> Result<Self, ()> {
-        peripheral_clock_controller.enable(Peripheral::ApbSarAdc);
+        PeripheralClockControl::enable(Peripheral::ApbSarAdc);
 
         let sar_adc = unsafe { &*APB_SARADC::PTR };
         sar_adc.ctrl.modify(|_, w| unsafe {
@@ -613,16 +593,15 @@ impl AdcCalEfuse for ADC2 {
     }
 }
 
-impl<'d, ADCI, WORD, PIN, CS> OneShot<ADCI, WORD, AdcPin<PIN, ADCI, CS>> for ADC<'d, ADCI>
+impl<'d, ADCI, PIN, CS> OneShot<ADCI, u16, AdcPin<PIN, ADCI, CS>> for ADC<'d, ADCI>
 where
-    WORD: From<u16>,
     PIN: Channel<ADCI, ID = u8>,
     ADCI: RegisterAccess,
     CS: AdcCalScheme<ADCI>,
 {
     type Error = ();
 
-    fn read(&mut self, pin: &mut AdcPin<PIN, ADCI, CS>) -> nb::Result<WORD, Self::Error> {
+    fn read(&mut self, pin: &mut AdcPin<PIN, ADCI, CS>) -> nb::Result<u16, Self::Error> {
         if self.attenuations[AdcPin::<PIN, ADCI>::channel() as usize] == None {
             panic!(
                 "Channel {} is not configured reading!",
@@ -648,6 +627,19 @@ where
             let attenuation = self.attenuations[channel as usize].unwrap() as u8;
             ADCI::config_onetime_sample(channel, attenuation);
             ADCI::start_onetime_sample();
+
+            // see https://github.com/espressif/esp-idf/blob/b4268c874a4cf8fcf7c0c4153cffb76ad2ddda4e/components/hal/adc_oneshot_hal.c#L105-L107
+            // the delay might be a bit generous but longer delay seem to not cause problems
+            #[cfg(esp32c6)]
+            {
+                extern "C" {
+                    fn ets_delay_us(us: u32);
+                }
+                unsafe {
+                    ets_delay_us(40);
+                }
+                ADCI::start_onetime_sample();
+            }
         }
 
         // Wait for ADC to finish conversion
@@ -676,7 +668,7 @@ where
         // Mark that no conversions are currently in progress
         self.active_channel = None;
 
-        Ok(converted_value.into())
+        Ok(converted_value)
     }
 }
 
@@ -719,12 +711,7 @@ mod implementation {
     //!
     //! let mut pin = adc1_config.enable_pin(io.pins.gpio2.into_analog(), Attenuation::Attenuation11dB);
     //!
-    //! let mut adc1 = ADC::<ADC1>::adc(
-    //!     &mut system.peripheral_clock_control,
-    //!     analog.adc1,
-    //!     adc1_config,
-    //! )
-    //! .unwrap();
+    //! let mut adc1 = ADC::<ADC1>::adc(analog.adc1, adc1_config).unwrap();
     //!
     //! let mut delay = Delay::new(&clocks);
     //!
@@ -771,12 +758,7 @@ mod implementation {
     //!
     //! let mut pin = adc1_config.enable_pin(io.pins.gpio2.into_analog(), Attenuation::Attenuation11dB);
     //!
-    //! let mut adc1 = ADC::<ADC1>::adc(
-    //!     &mut system.peripheral_clock_control,
-    //!     analog.adc1,
-    //!     adc1_config,
-    //! )
-    //! .unwrap();
+    //! let mut adc1 = ADC::<ADC1>::adc(analog.adc1, adc1_config).unwrap();
     //!
     //! let mut delay = Delay::new(&clocks);
     //!
@@ -828,12 +810,7 @@ mod implementation {
     //!
     //! let mut pin = adc1_config.enable_pin(io.pins.gpio2.into_analog(), Attenuation::Attenuation11dB);
     //!
-    //! let mut adc1 = ADC::<ADC1>::adc(
-    //!     &mut system.peripheral_clock_control,
-    //!     analog.adc1,
-    //!     adc1_config,
-    //! )
-    //! .unwrap();
+    //! let mut adc1 = ADC::<ADC1>::adc(analog.adc1, adc1_config).unwrap();
     //!
     //! let mut delay = Delay::new(&clocks);
     //!
@@ -881,12 +858,7 @@ mod implementation {
     //!
     //! let mut pin = adc1_config.enable_pin(io.pins.gpio2.into_analog(), Attenuation::Attenuation11dB);
     //!
-    //! let mut adc1 = ADC::<ADC1>::adc(
-    //!     &mut system.peripheral_clock_control,
-    //!     analog.adc1,
-    //!     adc1_config,
-    //! )
-    //! .unwrap();
+    //! let mut adc1 = ADC::<ADC1>::adc(analog.adc1, adc1_config).unwrap();
     //!
     //! let mut delay = Delay::new(&clocks);
     //!

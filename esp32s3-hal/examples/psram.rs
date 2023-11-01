@@ -5,13 +5,7 @@
 #![no_std]
 #![no_main]
 
-use esp32s3_hal::{
-    clock::ClockControl,
-    peripherals::Peripherals,
-    prelude::*,
-    psram,
-    timer::TimerGroup,
-};
+use esp32s3_hal::{clock::ClockControl, peripherals::Peripherals, prelude::*, psram};
 use esp_backtrace as _;
 use esp_println::println;
 
@@ -31,14 +25,15 @@ fn main() -> ! {
     #[cfg(debug_assertions)]
     compile_error!("PSRAM on ESP32-S3 needs to be built in release mode");
 
+    #[cfg(feature = "log")]
     esp_println::logger::init_logger_from_env();
 
     let peripherals = Peripherals::take();
     psram::init_psram(peripherals.PSRAM);
     init_psram_heap();
 
-    let mut system = peripherals.SYSTEM.split();
-    let clocks = ClockControl::configure(
+    let system = peripherals.SYSTEM.split();
+    let _clocks = ClockControl::configure(
         system.clock_control,
         esp_hal_common::clock::CpuClock::Clock240MHz,
     )
